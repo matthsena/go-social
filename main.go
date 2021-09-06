@@ -1,19 +1,21 @@
 package main
 
 import (
-	"io"
 	"log"
 	"net/http"
 
+	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
+	"github.com/rs/cors"
 )
 
 type ChatMessage struct {
 	Username string `json:"username"`
 	Text     string `json:"text"`
+	Room     string  `json:"room"`
 }
 
-var clients = make(map[*websocket.Conn]bool)
+var clients = make(map[*websocket.Conn]string)
 var broadcaster = make(chan ChatMessage)
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -24,18 +26,24 @@ var upgrader = websocket.Upgrader{
 }
 
 func handleConnections(w http.ResponseWriter, r *http.Request) {
+	params := mux.Vars(r)
+
+	room := params["room"]
+
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer ws.Close()
 	
-	clients[ws] = true
+	clients[ws] = room
 
 	for {
 		var msg ChatMessage
 
 		err := ws.ReadJSON(&msg)
+		msg.Room = room
+		
 		if err != nil {
 			delete(clients, ws)
 			break
@@ -44,43 +52,49 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func unsafeError(err error) bool {
-	return !websocket.IsCloseError(err, websocket.CloseGoingAway) && err != io.EOF
-}
-
 func handleMessages() {
 	for {
-		msg := <-broadcaster
-
-		messageClients(msg)
+		messageClients(<-broadcaster)
 	}
 }
 
 func messageClients(msg ChatMessage) {
 	for client := range clients {
-		messageClient(client, msg)
-	}
-}
+		
+		room := clients[client]
 
-func messageClient(client *websocket.Conn, msg ChatMessage) {
-	err := client.WriteJSON(msg)
+		if room == msg.Room {
+			err := client.WriteJSON(msg)
 
-	if err != nil && unsafeError(err) {
-		log.Printf("error: %v", err)
-		client.Close()
-		delete(clients, client)
+			if err != nil {
+				log.Printf("error: %v", err)
+				client.Close()
+				delete(clients, client)
+			}
+		}
 	}
 }
 
 func main() {
-	http.Handle("/", http.FileServer(http.Dir("./public")))
-	http.HandleFunc("/websocket", handleConnections)
+	r := mux.NewRouter()
+
+	r.Handle("/", http.FileServer(http.Dir("./public")))
+	r.HandleFunc("/ws/{room}", handleConnections)
 	
 	go handleMessages()
 
+
+
+	c := cors.New(cors.Options{
+		AllowedOrigins: []string{"*"},
+		AllowCredentials: true,
+	})
+	
 	log.Print("running http://localhost:8080")
 
-	if err := http.ListenAndServe(":8080", nil); err != nil {
-		log.Fatal(err)
-	}
+
+	handler := c.Handler(r)	
+	PORT := ":8080"
+
+	log.Fatal(http.ListenAndServe(PORT, handler))
 }

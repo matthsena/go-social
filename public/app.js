@@ -6,7 +6,9 @@ window.addEventListener('DOMContentLoaded', (_) => {
     let data = JSON.parse(e.data);
     let chatContent = `<p><strong>${data.username}</strong>: ${data.text}</p>`;
 
-    room.append(chatContent);
+    room.innerHTML += chatContent
+
+    // room.append(chatContent);
     room.scrollTop = room.scrollHeight; // Auto scroll to the bottom
   });
 
